@@ -1,6 +1,6 @@
 ## Plant Patch Logistic Growth
 
-[Try Me](https://codepen.io/mootytootyfrooty/pen/LEVjoRx)
+## [Try Me](https://codepen.io/mootytootyfrooty/pen/LEVjoRx)
 
 Joshua Brewster MIT License
 
