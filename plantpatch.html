@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<!-- Joshua Brewster MIT License -->
+<!-- https://www.researchgate.net/publication/8267477_Self-Organized_Patchiness_and_Catastrophic_Shifts_in_Ecosystems -->
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Plant Patch Cellular Automata</title>
+  <style>
+    body { margin:0; background:#111; color:#eee; font-family:sans-serif; display:flex; height:100vh; }
+    #controls { width:300px; padding:1rem; background:#222; overflow-y:auto; }
+    .slider-group { margin:1rem 0; }
+    .slider-group label { display:block; font-size:.9rem; margin-bottom:.3rem; }
+    .slider-group input, .slider-group select { width:100%; box-sizing:border-box; }
+    #controls button { width:100%; padding:.5rem; margin:.5rem 0; font-size:.9rem; cursor:pointer; }
+    #legend { margin-top:2rem; }
+    #legend canvas { display:block; margin:.5rem 0; width:100%; height:20px; }
+    #legend .labels { display:grid; font-size:.8rem; text-align:center; }
+    #canvas-container { flex:1; display:flex; align-items:center; justify-content:center; }
+    canvas#ca { image-rendering:pixelated; background:#000; cursor: crosshair; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <h2>Plant Patch CA</h2>
+
+    <!-- Grid & state -->
+    <div class="slider-group"><label for="grid-width">Grid Width</label><input id="grid-width" type="number" min="50" max="1000" step="10" value="200"></div>
+    <div class="slider-group"><label for="grid-height">Grid Height</label><input id="grid-height" type="number" min="50" max="1000" step="10" value="200"></div>
+    <div class="slider-group"><label for="max-state">Max State</label><input id="max-state" type="number" min="1" max="20" step="1" value="5"></div>
+
+    <!-- Draw/erase -->
+    <div class="slider-group"><label for="brush-radius">Brush Radius (<span id="brush-val">5</span>)</label><input id="brush-radius" type="range" min="1" max="100" step="1" value="5"></div>
+    <div class="slider-group"><label for="tool-select">Tool</label><select id="tool-select"><option value="draw">Draw (Max)</option><option value="erase">Erase (Min)</option></select></div>
+
+    <!-- Simulation -->
+    <button id="simulate-btn">Start Simulation</button>
+    <button id="reset-btn">Reset CA</button>
+
+    <!-- Feedback -->
+    <div class="slider-group"><label for="strength">Positive Strength (<span id="strength-val">1.0</span>)</label><input id="strength" type="range" min="0" max="5" step="0.1" value="1"></div>
+    <div class="slider-group"><label for="scale">Positive Scale (<span id="scale-val">1</span>)</label><input id="scale" type="range" min="1" max="10" step="1" value="1"></div>
+    <div class="slider-group"><label for="negStrength">Negative Strength (<span id="neg-strength-val">0.15</span>)</label><input id="negStrength" type="range" min="0" max="1" step="0.05" value="0.15"></div>
+    <div class="slider-group"><label for="negScale">Negative Scale (<span id="neg-scale-val">10</span>)</label><input id="negScale" type="range" min="5" max="50" step="1" value="10"></div>
+
+    <!-- Color -->
+    <div class="slider-group"><label for="preset-select">Color Range</label><select id="preset-select"><option value="grayscale">Grayscale</option><option value="full">Full Hue</option><option value="warm">Warm</option><option value="greens">Greens</option><option value="blues">Blues</option><option value="random">Random Subset</option></select></div>
+    <button id="gradient-btn">New Gradient</button>
+
+    <!-- Legend -->
+    <div id="legend">
+      <h3>State Legend</h3>
+      <canvas id="legend-canvas"></canvas>
+      <div class="labels"></div>
+    </div>
+  </div>
+
+  <div id="canvas-container"><!-- canvas will be injected here --></div>
+
+  <script>
+  (function(){
+    // DOM refs
+    const controls = {
+      gridW:    document.getElementById('grid-width'),
+      gridH:    document.getElementById('grid-height'),
+      maxS:     document.getElementById('max-state'),
+      brush:    document.getElementById('brush-radius'),
+      brushVal: document.getElementById('brush-val'),
+      tool:     document.getElementById('tool-select'),
+      simBtn:   document.getElementById('simulate-btn'),
+      resetBtn: document.getElementById('reset-btn'),
+      strength: document.getElementById('strength'),
+      scale:    document.getElementById('scale'),
+      negStr:   document.getElementById('negStrength'),
+      negSc:    document.getElementById('negScale'),
+      preset:   document.getElementById('preset-select'),
+      gradBtn:  document.getElementById('gradient-btn'),
+      legendCan:document.getElementById('legend-canvas'),
+      legendLbl:document.querySelector('#legend .labels'),
+      canvasCt: document.getElementById('canvas-container')
+    };
+
+    // Brush & tool
+    let brushR = +controls.brush.value, tool='draw';
+    controls.brush.addEventListener('input', () => {
+      brushR = +controls.brush.value;
+      controls.brushVal.textContent = brushR;
+    });
+    controls.tool.addEventListener('change', () => {
+      tool = controls.tool.value;
+    });
+
+    // Feedback sliders labels
+    const valMap = {
+      strength:    'strength-val',
+      scale:       'scale-val',
+      negStrength: 'neg-strength-val',
+      negScale:    'neg-scale-val'
+    };
+    [controls.strength, controls.scale, controls.negStr, controls.negSc].forEach(el => {
+      el.addEventListener('input', () => {
+        document.getElementById(valMap[el.id]).textContent = el.value;
+      });
+    });
+
+    // HSL → RGB helper
+    function hslToRgb(h,s,l){
+      let r,g,b;
+      if(!s) r=g=b=l;
+      else {
+        const hue2=(p,q,t)=>{
+          if(t<0)t+=1; if(t>1)t-=1;
+          if(t<1/6)return p+(q-p)*6*t;
+          if(t<1/2)return q;
+          if(t<2/3)return p+(q-p)*(2/3-t)*6;
+          return p;
+        };
+        const q = l<0.5? l*(1+s): l+s-l*s;
+        const p = 2*l - q;
+        r = hue2(p,q,h+1/3);
+        g = hue2(p,q,h);
+        b = hue2(p,q,h-1/3);
+      }
+      return [Math.round(r*255),Math.round(g*255),Math.round(b*255)];
+    }
+
+    // Shared state
+    let gridW, gridH, maxState, size, NUMW;
+    let currentRun=0, gen=0;
+    let grid, newGrid, renderW, stepWs, channel;
+    let caCanvas;
+
+    // Recreate canvas & workers
+    function initializeCA(){
+      // Read inputs
+      gridW    = +controls.gridW.value;
+      gridH    = +controls.gridH.value;
+      maxState = +controls.maxS.value;
+      size      = gridW * gridH;
+      NUMW      = Math.min(8, navigator.hardwareConcurrency || 8);
+
+      // Cancel any in-flight runs
+      currentRun++; gen = 0;
+
+      // Recreate canvas element
+      controls.canvasCt.innerHTML = '<canvas id="ca"></canvas>';
+      caCanvas = document.getElementById('ca');
+
+      // Set logical & CSS size
+      caCanvas.width  = gridW;
+      caCanvas.height = gridH;
+      caCanvas.style.width  = (gridW * 3) + 'px';
+      caCanvas.style.height = (gridH * 3) + 'px';
+
+      // Attach draw/erase
+      attachDrawing();
+
+      // Rebuild legend labels
+      controls.legendLbl.innerHTML = '';
+      for(let i=0;i<=maxState;i++){
+        const sp = document.createElement('span');
+        sp.textContent = i;
+        controls.legendLbl.appendChild(sp);
+      }
+      controls.legendLbl.style.gridTemplateColumns = `repeat(${maxState+1},1fr)`;
+
+      // Initialize grids
+      grid    = new Float32Array(size);
+      newGrid = new Float32Array(size);
+      for(let i=0;i<size;i++){
+        grid[i] = Math.random()<0.05? 2 : 0;
+      }
+
+      // Terminate old workers
+      if(renderW) renderW.terminate();
+      if(stepWs) stepWs.forEach(w=>w.terminate());
+
+      // Render worker setup
+      channel = new MessageChannel();
+      const rBlob = new Blob([`
+        let ctx,img, pal=[];
+        onmessage=e=>{
+          const d=e.data;
+          if(d.canvas)        ctx=d.canvas.getContext('2d');
+          else if(d.init)     img=new ImageData(d.width,d.height);
+          else if(d.gradient) pal=d.gradient;
+          else if(d.port){
+            d.port.onmessage=ev=>{
+              const g=ev.data.grid, px=img.data;
+              for(let i=0,pi=0;i<g.length;i++,pi+=4){
+                const s=Math.round(g[i])||0;
+                const [r,c,b]=pal[s]||[0,0,0];
+                px[pi]=r;px[pi+1]=c;px[pi+2]=b;px[pi+3]=255;
+              }
+              ctx.putImageData(img,0,0);
+            };
+            d.port.start();
+          }
+        };
+      `],{type:'application/javascript'});
+      renderW = new Worker(URL.createObjectURL(rBlob));
+      const off = caCanvas.transferControlToOffscreen();
+      renderW.postMessage({canvas:off},[off]);
+      renderW.postMessage({init:true,width:gridW,height:gridH});
+      renderW.postMessage({port:channel.port2},[channel.port2]);
+
+      // Step workers setup
+      const sBlob = new Blob([`
+        let w,h,mS;
+        function offs(r){
+          const o=[], r2=r*r;
+          for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++)
+            if(dx*dx+dy*dy<=r2) o.push(dx+dy*w);
+          return o;
+        }
+        onmessage=e=>{
+          const d=e.data;
+          if(d.type==='init'){ w=d.width; h=d.height; mS=d.maxState;}
+          else if(d.type==='step'){
+            const {segment,startRow,endRow,Tpos,Tneg,posR,negR,margin,gen}=d;
+            const inG=new Float32Array(segment);
+            const rows=endRow-startRow;
+            const pO=offs(posR), nO=offs(negR);
+            const pC=pO.length,nC=nO.length;
+            const out=new Float32Array(rows*w);
+            for(let r=0;r<rows;r++){
+              for(let c=0;c<w;c++){
+                const idx0=(r+margin)*w+c;
+                const s0=inG[idx0];
+                let sumL=0,sumN=0;
+                for(let k=0;k<pC;k++) sumL+=inG[idx0+pO[k]];
+                for(let k=0;k<nC;k++) sumN+=inG[idx0+nO[k]];
+                const local=sumL/pC, global=sumN/nC;
+                let s=s0;
+                if(local>Tpos&&global<Tneg) s=Math.min(s0+1,mS);
+                else if(local<Tpos&&global>Tneg) s=Math.max(s0-1,0);
+                out[r*w+c]=s;
+              }
+            }
+            postMessage({startRow,segment:out,gen},[out.buffer]);
+          }
+        };
+      `],{type:'application/javascript'});
+      stepWs = Array.from({length:NUMW},_=> new Worker(URL.createObjectURL(sBlob)));
+      stepWs.forEach(w=>w.postMessage({
+        type:'init', width:gridW, height:gridH, maxState
+      }));
+
+      // Draw initial gradient & start CA loop
+      applyGradient();
+      stepParallel(currentRun);
+    }
+
+    // Color gradient
+    function generateGradient(){
+      if(controls.preset.value==='grayscale'){
+        return Array.from({length:maxState+1},(_,i)=> {
+          const v=Math.round((i/maxState)*200+30);
+          return [v,v,v];
+        });
+      }
+      let sH,eH;
+      switch(controls.preset.value){
+        case 'warm':   sH=0;eH=60;break;
+        case 'greens': sH=210;eH=120;break;
+        case 'blues':  sH=210;eH=270;break;
+        case 'random':
+          sH=Math.random()*360; eH=sH+30+Math.random()*180;
+          break;
+        default: sH=0; eH=360;
+      }
+      const pal=[];
+      for(let i=0;i<=maxState;i++){
+        const t=i/maxState, raw=sH+t*(eH-sH);
+        const hue=((raw%360)+360)%360;
+        pal.push(hslToRgb(hue/360,0.6,0.5));
+      }
+      return pal;
+    }
+    function applyGradient(){
+      const pal = generateGradient();
+      renderW.postMessage({gradient:pal});
+      const ctx = controls.legendCan.getContext('2d');
+      const w = controls.legendCan.width = controls.legendCan.clientWidth;
+      const h = controls.legendCan.height=20;
+      const g = ctx.createLinearGradient(0,0,w,0);
+      pal.forEach((c,i)=>g.addColorStop(i/(pal.length-1),
+        `rgb(${c[0]},${c[1]},${c[2]})`
+      ));
+      ctx.fillStyle=g; ctx.fillRect(0,0,w,h);
+    }
+    controls.gradBtn.addEventListener('click',applyGradient);
+
+    // CA stepping loop
+    function stepParallel(runId){
+      const Tpos = +controls.strength.value / maxState;
+      const Tneg = +controls.negStr.value;
+      const posR = +controls.scale.value;
+      const negR = +controls.negSc.value;
+      const margin = Math.max(posR,negR);
+      const thisGen = gen++;
+
+      const per = Math.floor(gridH/NUMW), tasks=[];
+      for(let i=0;i<NUMW;i++){
+        const sr=i*per, er=(i===NUMW-1?gridH:(i+1)*per);
+        const a=sr-margin, b=er+margin, rows=b-a;
+        const seg=new Float32Array(rows*gridW);
+        for(let y=a;y<b;y++){
+          const yy=(y+gridH)%gridH;
+          seg.set(grid.subarray(yy*gridW,yy*gridW+gridW),(y-a)*gridW);
+        }
+        tasks.push(new Promise(res=>{
+          stepWs[i].onmessage=ev=>{
+            if(ev.data.gen!==thisGen) return;
+            res(ev.data);
+          };
+          stepWs[i].postMessage({
+            type:'step', segment:seg,
+            startRow:sr, endRow:er,
+            Tpos,Tneg,posR,negR,margin,gen:thisGen
+          },[seg.buffer]);
+        }));
+      }
+
+      Promise.all(tasks).then(results=>{
+        if(runId!==currentRun) return;
+        results.forEach(({startRow,segment})=>{
+          const rows = segment.length/gridW;
+          for(let r=0;r<rows;r++){
+            newGrid.set(
+              segment.subarray(r*gridW,(r+1)*gridW),
+              (startRow+r)*gridW
+            );
+          }
+        });
+        [grid,newGrid]=[newGrid,grid];
+        newGrid=new Float32Array(size);
+
+        const buf=new Float32Array(grid);
+        channel.port1.postMessage({grid:buf},[buf.buffer]);
+        stepParallel(runId);
+      });
+    }
+
+    // Draw/erase with propagation
+    function attachDrawing(){
+      let drawing=false;
+      caCanvas.addEventListener('mousedown', e=>{ drawing=true; onDraw(e); });
+      caCanvas.addEventListener('mousemove', e=> drawing && onDraw(e));
+      window.addEventListener('mouseup', ()=> drawing=false);
+
+      function onDraw(e){
+        const rect = caCanvas.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left)*gridW/rect.width);
+        const y = Math.floor((e.clientY - rect.top )*gridH/rect.height);
+        for(let dy=-brushR; dy<=brushR; dy++){
+          const yy=y+dy; if(yy<0||yy>=gridH) continue;
+          const row=yy*gridW;
+          const dxMax=Math.floor(Math.sqrt(brushR*brushR - dy*dy));
+          for(let dx=-dxMax; dx<=dxMax; dx++){
+            const xx=x+dx; if(xx<0||xx>=gridW) continue;
+            grid[row+xx] = (tool==='draw'? maxState: 0);
+          }
+        }
+        // immediate redraw
+        const clone=new Float32Array(grid);
+        channel.port1.postMessage({grid:clone},[clone.buffer]);
+
+        // cancel in-flight CA loops and restart so the draw sticks
+        currentRun++;
+        newGrid = new Float32Array(size);
+        stepParallel(currentRun);
+      }
+    }
+
+    // Simulation toggle
+    let sim=false, simI;
+    controls.simBtn.addEventListener('click', ()=>{
+      sim = !sim;
+      controls.simBtn.textContent = sim ? 'Stop Simulation' : 'Start Simulation';
+      if(sim){
+        simI = setInterval(()=>{
+          [controls.strength,controls.scale,controls.negStr,controls.negSc].forEach(el=>{
+            const mi=+el.min, ma=+el.max, st=+el.step;
+            const steps=Math.round((ma-mi)/st);
+            el.value = mi + st*Math.floor(Math.random()*(steps+1));
+            el.dispatchEvent(new Event('input'));
+          });
+        },1000);
+      } else clearInterval(simI);
+    });
+
+    // Reset
+    controls.resetBtn.addEventListener('click', initializeCA);
+
+    // Initial run
+    initializeCA();
+  })();
+  </script>
+</body>
+</html>
